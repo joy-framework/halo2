@@ -7,4 +7,4 @@
   :repo "git+https://github.com/joy-framework/halo2.git")
 
 (declare-source
-  :source ["src/"])
+  :source ["src/halo2.janet"])
