@@ -51,7 +51,7 @@
     (= "close" conn)))
 
 
-(def headers-peg (peg/compile '{:main (* :request-line :crlf (some :headers) :crlf)
+(def request-peg (peg/compile '{:main (* :request-line :crlf (some :headers) :crlf)
                                 :request-line (* (<- (to :sp)) :sp (<- (to :sp)) :sp "HTTP/" (<- (to :crlf)))
                                 :headers (* (? :crlf) (<- (to ":")) ": " (<- (to :crlf)))
                                 :sp " "
@@ -60,12 +60,12 @@
 
 (defn body [headers buf]
   (when-let [len (content-length headers)]
-    # inc required to get the full content-length
+    # inc required to get the full content-length up to crlf
     (string/slice buf (* -1 (inc len)))))
 
 
 (defn request [buf]
-  (let [parts (peg/match headers-peg buf)
+  (let [parts (peg/match request-peg buf)
         [method uri http-version] parts
         headers (table ;(drop 3 parts))
         body (body headers buf)]
@@ -117,8 +117,7 @@
           # clear buffer for memory?
           (buffer/clear buf)
 
-          # close connection right away unless keep alive?
-          # TODO keep alive
+          # close connection right away if Connection: close
           (when (close-connection? req)
             (break)))))))
 
