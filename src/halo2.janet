@@ -51,9 +51,9 @@
     (= "close" conn)))
 
 
-(def request-peg (peg/compile '{:main (* :request-line :crlf (some :headers) :crlf)
-                                :request-line (* (<- (to :sp)) :sp (<- (to :sp)) :sp "HTTP/" (<- (to :crlf)))
-                                :headers (* (? :crlf) (<- (to ":")) ": " (<- (to :crlf)))
+(def request-peg (peg/compile '{:main (sequence :request-line :crlf (some :headers) :crlf)
+                                :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
+                                :headers (sequence (opt :crlf) (capture (to ":")) ": " (capture (to :crlf)))
                                 :sp " "
                                 :crlf "\r\n"}))
 
