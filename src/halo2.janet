@@ -46,6 +46,13 @@
     (scan-number cl)))
 
 
+(defn request-parsing-complete? [buf {:headers headers :body body}]
+  (let [cl (content-length headers)]
+    (or (= cl (length body))
+        (and (nil? cl)
+             (string/has-suffix? "\r\n\r\n" buf)))))
+
+
 (defn close-connection? [req]
   (let [conn (get-in req [:headers "Connection"])]
     (= "close" conn)))
@@ -59,22 +66,25 @@
 
 
 (defn body [headers buf]
-  (when-let [len (content-length headers)]
+  (if-let [len (content-length headers)]
     # inc required to get the full content-length up to crlf
-    (string/slice buf (* -1 (inc len)))))
+    (string/slice buf (* -1 (inc len)))
+    ""))
 
 
 (defn request [buf]
-  (let [parts (peg/match request-peg buf)
-        [method uri http-version] parts
-        headers (table ;(drop 3 parts))
-        body (body headers buf)]
-
-    @{:headers headers
-      :uri uri
-      :method method
-      :http-version http-version
-      :body body}))
+  (when-let [parts (peg/match request-peg buf)
+             [method uri http-version] parts
+             headers (table ;(drop 3 parts))
+             body (body headers buf)
+             req @{:headers headers
+                   :uri uri
+                   :method method
+                   :http-version http-version
+                   :body body}]
+    (if (request-parsing-complete? buf req)
+      req
+      nil)))
 
 
 (defn http-response-headers [headers]
@@ -107,9 +117,9 @@
 
     (defer (:close stream)
       (while (:read stream 1024 buf)
-        (let [req (request buf)
-              res (handler req)
-              response (http-response res)]
+        (when-let [req (request buf)
+                   res (handler req)
+                   response (http-response res)]
 
           # write the response to the stream
           (:write stream response)
