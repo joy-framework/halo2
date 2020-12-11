@@ -72,10 +72,23 @@
     ""))
 
 
+(defn request-headers [parts]
+  (var output @{})
+
+  (let [parts (partition 2 parts)]
+
+    (each [k v] parts
+      (if (get output k)
+        (put output k (string (get output k) "," v))
+        (put output k v))))
+
+  output)
+
+
 (defn request [buf]
   (when-let [parts (peg/match request-peg buf)
              [method uri http-version] parts
-             headers (table ;(drop 3 parts))
+             headers (request-headers (drop 3 parts))
              body (body headers buf)
              req @{:headers headers
                    :uri uri
