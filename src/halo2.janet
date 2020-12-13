@@ -41,6 +41,18 @@
    505 "HTTP Version not supported"})
 
 
+(def- mime-types {".txt" "text/plain"
+                  ".css" "text/css"
+                  ".js" "application/javascript"
+                  ".json" "application/json"
+                  ".xml" "text/xml"
+                  ".svg" "image/svg"
+                  ".jpg" "image/jpeg"
+                  ".jpeg" "image/jpeg"
+                  ".gif" "image/gif"
+                  ".png" "image/png"})
+
+
 (defn content-length [headers]
   (when-let [cl (get headers "Content-Length")]
     (scan-number cl)))
@@ -95,24 +107,54 @@
                    :method method
                    :http-version http-version
                    :body body}]
-    (if (request-parsing-complete? buf req)
-      req
-      nil)))
+    (when (request-parsing-complete? buf req)
+      req)))
+
+
+(defn http-response-header [header]
+  (let [[k v] header]
+    (if (indexed? v)
+      (string/format "%s: %s" (string/join v ","))
+      (string/format "%s: %s" k v))))
 
 
 (defn http-response-headers [headers]
   (as-> (pairs headers) ?
-        (map (fn [[k v]] (string/format "%s: %s" k v)) ?)
+        (map http-response-header ?)
         (string/join ? "\r\n")))
+
+
+(defn file-exists? [str]
+  (= :file (os/stat str :mode)))
 
 
 (defn http-response
   "Turns a response dictionary into an http response string"
   [response]
-  (let [status (get response :status 200)
+  (var res response)
+  (def file (->> (get response :file) (string ".")))
+
+  # check for static files
+  (when (get response :file)
+    (if (file-exists? file)
+      (let [ext (->> file
+                     (string/find-all ".")
+                     (last)
+                     (string/slice file))
+            content-type (get mime-types ext)
+            body (-> file slurp string)]
+        (set res @{:status 200
+                   :headers @{"Content-Type" content-type}
+                   :body body}))
+      (set res @{:status 404
+                 :headers @{"Content-Type" "text/plain"}
+                 :body "Not found"})))
+
+  # regular http responses
+  (let [status (get res :status 200)
         status-message (get status-messages status "Unknown Status Code")
-        body (get response :body "")
-        headers (get response :headers {})
+        body (get res :body "")
+        headers (get res :headers @{})
         headers (merge {"Content-Length" (string (length body))} headers)
         headers (http-response-headers headers)]
     (string/format "HTTP/1.1 %d %s\r\n%s\r\n\r\n%s"
