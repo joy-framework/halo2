@@ -132,10 +132,10 @@
   "Turns a response dictionary into an http response string"
   [response]
   (var res response)
-  (def file (->> (get response :file) (string ".")))
+  (def {:file file} response)
 
   # check for static files
-  (when (get response :file)
+  (when file
     (if (file-exists? file)
       (let [ext (->> file
                      (string/find-all ".")
