@@ -190,7 +190,7 @@
 (defn server [handler port &opt host]
   (default host "localhost")
 
-  (let [socket (net/server host port)]
+  (let [socket (net/server host (string port))]
     (printf "Starting server on %s:%s" host (string port))
 
     (forever
