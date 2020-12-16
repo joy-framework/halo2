@@ -78,9 +78,12 @@
 
 
 (defn body [headers buf]
-  (if-let [len (content-length headers)]
-    # inc required to get the full content-length up to crlf
-    (string/slice buf (* -1 (inc len)))
+  (if-let [len (content-length headers)
+           # inc required to skip trailing crlf
+           len (inc len)
+           # check that body begins with crlf crlf
+           _ (string/has-prefix? "\r\n\r\n" (string/slice buf (* -1 (+ 4 len))))]
+    (string/slice buf (* -1 len))
     ""))
 
 
