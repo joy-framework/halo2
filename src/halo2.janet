@@ -46,7 +46,7 @@
                   ".js" "application/javascript"
                   ".json" "application/json"
                   ".xml" "text/xml"
-                  ".svg" "image/svg"
+                  ".svg" "image/svg+xml"
                   ".jpg" "image/jpeg"
                   ".jpeg" "image/jpeg"
                   ".gif" "image/gif"
