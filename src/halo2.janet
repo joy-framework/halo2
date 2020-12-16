@@ -114,7 +114,7 @@
 (defn http-response-header [header]
   (let [[k v] header]
     (if (indexed? v)
-      (string/format "%s: %s" (string/join v ","))
+      (string/format "%s: %s" k (string/join v ","))
       (string/format "%s: %s" k v))))
 
 
