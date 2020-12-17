@@ -19,4 +19,4 @@
     (static request)))
 
 
-(halo2/server app 9021 "0.0.0.0")
+(halo2/server app 9021 "localhost")
