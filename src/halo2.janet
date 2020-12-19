@@ -53,23 +53,6 @@
                   ".png" "image/png"})
 
 
-(defn content-length [headers]
-  (when-let [cl (get headers "Content-Length")]
-    (scan-number cl)))
-
-
-(defn request-parsing-complete? [buf {:headers headers :body body}]
-  (let [cl (content-length headers)]
-    (or (= cl (length body))
-        (and (nil? cl)
-             (string/has-suffix? "\r\n\r\n" buf)))))
-
-
-(defn close-connection? [req]
-  (let [conn (get-in req [:headers "Connection"])]
-    (= "close" conn)))
-
-
 (def request-peg (peg/compile '{:main (sequence :request-line :crlf (some :headers) :crlf)
                                 :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
                                 :headers (sequence (opt :crlf) (capture (to ":")) ": " (capture (to :crlf)))
@@ -77,14 +60,14 @@
                                 :crlf "\r\n"}))
 
 
-(defn body [headers buf]
-  (if-let [len (content-length headers)
-           # inc required to skip trailing crlf
-           len (inc len)
-           # check that body begins with crlf crlf
-           _ (string/has-prefix? "\r\n\r\n" (string/slice buf (* -1 (+ 4 len))))]
-    (string/slice buf (* -1 len))
-    ""))
+(defn content-length [req]
+  (when-let [cl (get-in req [:headers "Content-Length"])]
+    (scan-number cl)))
+
+
+(defn close-connection? [req]
+  (let [conn (get-in req [:headers "Connection"])]
+    (= "close" conn)))
 
 
 (defn request-headers [parts]
@@ -103,15 +86,11 @@
 (defn request [buf]
   (when-let [parts (peg/match request-peg buf)
              [method uri http-version] parts
-             headers (request-headers (drop 3 parts))
-             body (body headers buf)
-             req @{:headers headers
-                   :uri uri
-                   :method method
-                   :http-version http-version
-                   :body body}]
-    (when (request-parsing-complete? buf req)
-      req)))
+             headers (request-headers (drop 3 parts))]
+    @{:headers headers
+      :uri uri
+      :method method
+      :http-version http-version}))
 
 
 (defn http-response-header [header]
@@ -166,6 +145,8 @@
                    headers
                    body)))
 
+(def- MAX_SIZE 2048)
+(def- CRLF_2 "\r\n\r\n")
 
 (defn connection-handler
   "A function for turning circlet http handlers into stream handlers"
@@ -175,14 +156,25 @@
 
     (defer (:close stream)
       (while (:read stream 1024 buf)
-        (when-let [req (request buf)
-                   res (handler req)
-                   response (http-response res)]
 
-          # write the response to the stream
-          (:write stream response)
+        # handle payload too large
+        (when (> (length buf) MAX_SIZE)
+          (:write stream (http-response @{:status 413}))
+          (break))
 
-          # clear buffer for memory?
+        # parse request
+        (when-let [[head body] (string/split CRLF_2 buf)
+                   req (request head)
+                   _ (if-let [size (content-length req)]
+                       (when (= size (length body))
+                         (put req :body body))
+                       true)]
+
+          (->> req
+               handler
+               http-response
+               (:write stream))
+
           (buffer/clear buf)
 
           # close connection right away if Connection: close
@@ -199,5 +191,3 @@
     (forever
       (when-let [conn (:accept socket)]
         (ev/call (connection-handler handler) conn)))))
-
-
