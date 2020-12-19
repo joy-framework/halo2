@@ -1,9 +1,3 @@
-# conditional imports
-(defmacro try! [& forms]
-  ~(try
-    (do ,;forms)
-    ([_])))
-
 (import ../src/halo2 :prefix "")
 
 # tester is required
@@ -13,8 +7,7 @@
 # then
 # $ jpm test
 # to run
-(try!
-  (import tester :prefix "" :exit true))
+(import tester :prefix "" :exit true)
 
 (deftests
   (test "response"
