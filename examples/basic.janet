@@ -8,9 +8,16 @@
 (defn static [request]
   {:file (request :uri)})
 
+(defn post [request]
+  (printf "%q" request)
+  {:status 302
+   :headers @{"Location" "/"}})
+
 (defn app [request]
   (case (request :uri)
     "/" (home request)
+
+    "/post" (post request)
 
     # anything else is static
     (static request)))
