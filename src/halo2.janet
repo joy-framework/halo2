@@ -52,12 +52,14 @@
                   ".gif" "image/gif"
                   ".png" "image/png"})
 
+(def- MAX_SIZE 1024)
+(def- CRLF_2 "\r\n\r\n")
 
-(def request-peg (peg/compile '{:main (sequence :request-line :crlf (some :headers) :crlf)
-                                :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
-                                :headers (sequence (opt :crlf) (capture (to ":")) ": " (capture (to :crlf)))
-                                :sp " "
-                                :crlf "\r\n"}))
+(def head-peg (peg/compile '{:main (sequence :request-line :crlf (some :headers) :crlf)
+                             :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
+                             :headers (sequence (capture (to ":")) ": " (capture (to :crlf)) :crlf)
+                             :sp " "
+                             :crlf "\r\n"}))
 
 
 (defn content-length [req]
@@ -83,8 +85,8 @@
   output)
 
 
-(defn request [buf]
-  (when-let [parts (peg/match request-peg buf)
+(defn request [head]
+  (when-let [parts (peg/match head-peg head)
              [method uri http-version] parts
              headers (request-headers (drop 3 parts))]
     @{:headers headers
@@ -145,8 +147,6 @@
                    headers
                    body)))
 
-(def- MAX_SIZE 2048)
-(def- CRLF_2 "\r\n\r\n")
 
 (defn connection-handler
   "A function for turning circlet http handlers into stream handlers"
@@ -155,7 +155,7 @@
     (def buf @"")
 
     (defer (:close stream)
-      (while (:read stream 1024 buf)
+      (while (:read stream MAX_SIZE buf)
 
         # handle payload too large
         (when (> (length buf) MAX_SIZE)
@@ -163,9 +163,11 @@
           (break))
 
         # parse request
-        (when-let [[head body] (string/split CRLF_2 buf)
+        (when-let [idx (+ (string/find CRLF_2 buf) 4)
+                   head (buffer/slice buf 0 idx)
                    req (request head)
-                   _ (if-let [size (content-length req)]
+                   _ (if-let [size (content-length req)
+                              body (buffer/slice buf idx)]
                        (when (= size (length body))
                          (put req :body body))
                        true)]
