@@ -137,7 +137,7 @@
   # regular http responses
   (let [status (get res :status 200)
         status-message (get status-messages status "Unknown Status Code")
-        body (get res :body "")
+        body (string (get res :body ""))
         headers (get res :headers @{})
         headers (merge {"Content-Length" (string (length body))} headers)
         headers (http-response-headers headers)]
