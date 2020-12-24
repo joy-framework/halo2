@@ -52,7 +52,7 @@
                   ".gif" "image/gif"
                   ".png" "image/png"})
 
-(def- MAX_SIZE 1024)
+(def- MAX_SIZE 8_192) # 8k max body size
 (def- CRLF_2 "\r\n\r\n")
 
 (def head-peg (peg/compile '{:main (sequence :request-line :crlf (some :headers) :crlf)
@@ -155,21 +155,25 @@
     (def buf @"")
 
     (defer (:close stream)
-      (while (:read stream MAX_SIZE buf)
-
-        # handle payload too large
-        (when (> (length buf) MAX_SIZE)
-          (:write stream (http-response @{:status 413}))
-          (break))
+      (while (:read stream 1024 buf)
 
         # parse request
-        (when-let [idx (+ (string/find CRLF_2 buf) 4)
+        (when-let [idx (string/find CRLF_2 buf)
+                   idx (+ idx 4)
                    head (buffer/slice buf 0 idx)
                    req (request head)
                    _ (if-let [size (content-length req)
-                              body (buffer/slice buf idx)]
-                       (when (= size (length body))
-                         (put req :body body))
+                              body (buffer/slice buf idx)
+                              body-len (length body)]
+                       (do
+                         # handle payload too large
+                         (when (> body-len MAX_SIZE)
+                           (:write stream (http-response @{:status 413}))
+                           (break))
+
+                         (when (= size body-len)
+                           (put req :body body)))
+
                        true)]
 
           (->> req
