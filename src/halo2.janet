@@ -128,10 +128,12 @@
             content-type (get mime-types ext)
             body (-> file slurp string)]
         (set res @{:status 200
-                   :headers @{"Content-Type" content-type}
+                   :headers (merge @{"Content-Type" content-type}
+                                   (get res :headers {}))
                    :body body}))
       (set res @{:status 404
-                 :headers @{"Content-Type" "text/plain"}
+                 :headers (merge @{"Content-Type" "text/plain"}
+                                 (get res :headers {}))
                  :body "Not found"})))
 
   # regular http responses
