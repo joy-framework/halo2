@@ -50,7 +50,8 @@
                   ".jpg" "image/jpeg"
                   ".jpeg" "image/jpeg"
                   ".gif" "image/gif"
-                  ".png" "image/png"})
+                  ".png" "image/png"
+                  ".wasm" "application/wasm"})
 
 (def- MAX_SIZE 8_192) # 8k max body size
 (def- CRLF_2 "\r\n\r\n")
