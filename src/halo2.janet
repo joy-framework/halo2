@@ -46,6 +46,7 @@
                   ".js" "application/javascript"
                   ".json" "application/json"
                   ".xml" "text/xml"
+                  ".html" "text/html"
                   ".svg" "image/svg+xml"
                   ".jpg" "image/jpeg"
                   ".jpeg" "image/jpeg"
@@ -129,8 +130,7 @@
             content-type (get mime-types ext)
             body (-> file slurp string)]
         (set res @{:status 200
-                   :headers (merge @{"Content-Type" content-type}
-                                   (get res :headers {}))
+                   :headers (merge (get res :headers {}) @{"Content-Type" content-type})
                    :body body}))
       (set res @{:status 404
                  :headers (merge @{"Content-Type" "text/plain"}
