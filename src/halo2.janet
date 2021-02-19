@@ -90,11 +90,13 @@
 (defn request [head]
   (when-let [parts (peg/match head-peg head)
              [method uri http-version] parts
-             headers (request-headers (drop 3 parts))]
+             headers (request-headers (drop 3 parts))
+             [path] (peg/match '(capture (some (if-not (choice "?" "#") 1))) uri)]
     @{:headers headers
       :uri uri
       :method method
-      :http-version http-version}))
+      :http-version http-version
+      :path path}))
 
 
 (defn http-response-header [header]
