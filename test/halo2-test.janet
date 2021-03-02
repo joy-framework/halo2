@@ -1,13 +1,7 @@
+(import tester :prefix "" :exit true)
 (import ../src/halo2 :prefix "")
 
-# tester is required
-# but didn't want to add as dependency
-# $ jpm install tester
-# to install
-# then
-# $ jpm test
-# to run
-(import tester :prefix "" :exit true)
+# make sure tester is installed before running these tests
 
 (deftests
   (test "response"
@@ -20,5 +14,6 @@
     (is (deep= @{:http-version "1.1"
                  :headers @{"Content-Type" "text/plain"}
                  :uri "/"
+                 :path "/"
                  :method "GET"}
                (request @"GET / HTTP/1.1\r\nContent-Type: text/plain\r\n\r\n")))))

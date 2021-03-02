@@ -41,32 +41,43 @@
    505 "HTTP Version not supported"})
 
 
-(def- mime-types {".txt" "text/plain"
-                  ".css" "text/css"
-                  ".js" "application/javascript"
-                  ".json" "application/json"
-                  ".xml" "text/xml"
-                  ".html" "text/html"
-                  ".svg" "image/svg+xml"
-                  ".jpg" "image/jpeg"
-                  ".jpeg" "image/jpeg"
-                  ".gif" "image/gif"
-                  ".png" "image/png"
-                  ".wasm" "application/wasm"})
+(def- mime-types {"txt" "text/plain"
+                  "css" "text/css"
+                  "js" "application/javascript"
+                  "json" "application/json"
+                  "xml" "text/xml"
+                  "html" "text/html"
+                  "svg" "image/svg+xml"
+                  "pg" "image/jpeg"
+                  "jpeg" "image/jpeg"
+                  "gif" "image/gif"
+                  "png" "image/png"
+                  "wasm" "application/wasm"})
 
-(def- MAX_SIZE 8_192) # 8k max body size
-(def- CRLF_2 "\r\n\r\n")
+(var- *max-size* 8_192) # 8k max body size
 
-(def head-peg (peg/compile '{:main (sequence :request-line :crlf (some :headers) :crlf)
-                             :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
-                             :headers (sequence (capture (to ":")) ": " (capture (to :crlf)) :crlf)
-                             :sp " "
-                             :crlf "\r\n"}))
+(def request-peg
+  (peg/compile ~{:main (sequence :request-line :crlf (group (some :headers)) :crlf (opt :body))
+                 :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
+                 :headers (sequence (capture (to ":")) ": " (capture (to :crlf)) :crlf)
+                 :body (capture (some (if-not -1 1)))
+                 :sp " "
+                 :crlf "\r\n"}))
+
+(def path-peg
+  (peg/compile '(capture (some (if-not (choice "?" "#") 1)))))
+
+(def content-length-peg (peg/compile ~(some (choice (sequence "Content-Length: " (cmt (capture (to "\r\n")) ,scan-number)) 1))))
+
+(defn content-length [buf]
+  (or (first (peg/match content-length-peg buf))
+      0))
 
 
-(defn content-length [req]
-  (when-let [cl (get-in req [:headers "Content-Length"])]
-    (scan-number cl)))
+(defn content-type [s]
+  (as-> (string/split "." s) _
+        (last _)
+        (get mime-types _ "text/plain")))
 
 
 (defn close-connection? [req]
@@ -87,16 +98,17 @@
   output)
 
 
-(defn request [head]
-  (when-let [parts (peg/match head-peg head)
-             [method uri http-version] parts
-             headers (request-headers (drop 3 parts))
-             [path] (peg/match '(capture (some (if-not (choice "?" "#") 1))) uri)]
+(defn request [buf]
+  (when-let [parts (peg/match request-peg buf)
+             [method uri http-version headers body] parts
+             headers (request-headers headers)
+             [path] (peg/match path-peg uri)]
     @{:headers headers
       :uri uri
       :method method
       :http-version http-version
-      :path path}))
+      :path path
+      :body body}))
 
 
 (defn http-response-header [header]
@@ -116,88 +128,88 @@
   (= :file (os/stat str :mode)))
 
 
-(defn http-response
-  "Turns a response dictionary into an http response string"
-  [response]
-  (var res response)
-  (def {:file file} response)
-
-  # check for static files
-  (when file
-    (if (file-exists? file)
-      (let [ext (->> file
-                     (string/find-all ".")
-                     (last)
-                     (string/slice file))
-            content-type (get mime-types ext)
-            body (-> file slurp string)]
-        (set res @{:status 200
-                   :headers (merge (get res :headers {}) @{"Content-Type" content-type})
-                   :body body}))
-      (set res @{:status 404
-                 :headers (merge @{"Content-Type" "text/plain"}
-                                 (get res :headers {}))
-                 :body "Not found"})))
-
-  # regular http responses
+(defn http-response-string [res]
   (let [status (get res :status 200)
         status-message (get status-messages status "Unknown Status Code")
-        body (string (get res :body ""))
+        body (get res :body "")
         headers (get res :headers @{})
         headers (merge {"Content-Length" (string (length body))} headers)
         headers (http-response-headers headers)]
-    (string/format "HTTP/1.1 %d %s\r\n%s\r\n\r\n%s"
-                   status
-                   status-message
-                   headers
-                   body)))
+    (string "HTTP/1.1 " status " " status-message "\r\n"
+            headers "\r\n\r\n"
+            body)))
+
+
+(defn http-response
+  "Turns a response dictionary into an http response string"
+  [response]
+  # check for static files
+  (if-let [file (get response :file)]
+    (let [content-type (content-type file)
+          headers (get response :headers {})
+          file-exists? (file-exists? file)
+          body (if file-exists? (slurp file) "not found")
+          status (if file-exists? 200 404)]
+      (http-response-string @{:status status
+                              :headers (merge {"Content-Type" content-type} headers)
+                              :body body}))
+    # regular http responses
+    (http-response-string response)))
+
+
+(defn payload-too-large? [req]
+  (> (length (get req :body "")) *max-size*))
+
+
+(defmacro ignore-socket-hangup! [& args]
+  ~(try
+     ,;args
+     ([err fib]
+      (unless (= err "Connection reset by peer")
+        (propagate err fib)))))
 
 
 (defn connection-handler
   "A function for turning circlet http handlers into stream handlers"
   [handler]
+  (def buf (buffer/new 1024))
+
   (fn [stream]
-    (def buf @"")
+    (ignore-socket-hangup!
+      (defer (do (buffer/clear buf)
+                 (:close stream))
 
-    (defer (:close stream)
-      (while (:read stream 1024 buf)
+        (while (:read stream 1024 buf 1)
+          (when-let [content-length (content-length buf)
+                     req (request buf)
+                     _ (= content-length (length (get req :body "")))]
 
-        # parse request
-        (when-let [idx (string/find CRLF_2 buf)
-                   idx (+ idx 4)
-                   head (buffer/slice buf 0 idx)
-                   req (request head)
-                   _ (if-let [size (content-length req)
-                              body (buffer/slice buf idx)
-                              body-len (length body)]
-                       (do
-                         # handle payload too large
-                         (when (> body-len MAX_SIZE)
-                           (:write stream (http-response @{:status 413}))
-                           (break))
+            # handle payload too large
+            (when (payload-too-large? req)
+             (:write stream (http-response-string @{:status 413})
+              (break)))
 
-                         (when (= size body-len)
-                           (put req :body body)))
+            (->> req
+                 handler
+                 http-response
+                 (:write stream))
 
-                       true)]
+            (buffer/clear buf)
 
-          (->> req
-               handler
-               http-response
-               (:write stream))
-
-          (buffer/clear buf)
-
-          # close connection right away if Connection: close
-          (when (close-connection? req)
-            (break)))))))
+            # close connection right away if Connection: close
+            (when (close-connection? req)
+              (break))))))))
 
 
-(defn server [handler port &opt host]
+(defn server [handler port &opt host max-size]
   (default host "localhost")
+  (default max-size 8192)
 
-  (let [socket (net/server host (string port))]
-    (printf "Starting server on %s:%s" host (string port))
+  (set *max-size* max-size)
+
+  (let [port (string port)
+        socket (net/server host port)]
+    (printf "Starting server on %s:%s" host port)
 
     (forever
       (when-let [conn (:accept socket)]
