@@ -52,7 +52,8 @@
                   "jpeg" "image/jpeg"
                   "gif" "image/gif"
                   "png" "image/png"
-                  "wasm" "application/wasm"})
+                  "wasm" "application/wasm"
+                  "gz" "application/gzip"})
 
 (var- *max-size* 8_192) # 8k max body size
 
@@ -149,9 +150,11 @@
           headers (get response :headers {})
           file-exists? (file-exists? file)
           body (if file-exists? (slurp file) "not found")
-          status (if file-exists? 200 404)]
+          status (if file-exists? 200 404)
+          gzip? (= "application/gzip" content-type)]
       (http-response-string @{:status status
-                              :headers (merge {"Content-Type" content-type} headers)
+                              :headers (merge headers {"Content-Type" content-type
+                                                       "Content-Encoding" (when gzip? "gzip")})
                               :body body}))
     # regular http responses
     (http-response-string response)))
