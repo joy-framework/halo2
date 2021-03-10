@@ -168,7 +168,8 @@
   ~(try
      ,;args
      ([err fib]
-      (unless (= err "Connection reset by peer")
+      (unless (or (= err "Connection reset by peer")
+                  (= err "timeout"))
         (propagate err fib)))))
 
 
@@ -182,7 +183,7 @@
       (defer (do (buffer/clear buf)
                  (:close stream))
 
-        (while (:read stream 1024 buf 1)
+        (while (:read stream 1024 buf 7)
           (when-let [content-length (content-length buf)
                      req (request buf)
                      _ (= content-length (length (get req :body "")))]
