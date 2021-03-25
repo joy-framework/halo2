@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>Websocket Client</title>
+</head>
+<body>
+  check the console
+  <script>
+    var exampleSocket = new WebSocket("ws://localhost:9001");
+    exampleSocket.onopen = function (event) {
+      exampleSocket.send("Can you hear me?");
+    };
+    exampleSocket.onmessage = function (event) {
+      console.log(event.data);
+    };
+    setInterval(() => {
+      exampleSocket.send("Can you hear me now?")
+    }, 3000);
+  </script>
+</body>
+</html>
