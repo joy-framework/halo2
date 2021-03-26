@@ -8,21 +8,23 @@
 (defn static [request]
   {:file (string "./public" (request :path))})
 
-(defn ws [request]
-  (case (request :on)
+(defn ws [socket]
+  (case (socket :on)
     :connect
-    (print "connected")
+    (do
+      (print "connected")
+      (:send socket "Connected successfully"))
 
     :text
     (do
-      (printf "received a message: %q" (request :message))
-      "text response")))
+      (print (socket :message))
+      (:send socket "Yes, I can hear you"))))
 
 
 (defn app [request]
-  (case (request :path)
-    "/" (home request)
-    nil (ws request)
+  (case [(request :scheme) (request :path)]
+    ["http" "/"] (home request)
+    ["ws" "/"] (ws request)
     # anything else is static
     (static request)))
 

@@ -137,6 +137,7 @@
       :uri uri
       :method method
       :http-version http-version
+      :scheme "http"
       :path path
       :body body}))
 
@@ -250,6 +251,12 @@
           (:write connection _))))
 
 
+(defn make-socket [connection]
+  @{:connection connection
+    :send (fn [self message]
+            (:write connection (websocket-response message)))})
+
+
 (defn- connection-handler
   "A function for turning http handlers into connection handlers"
   [handler max-size]
@@ -257,6 +264,7 @@
 
   (fn [connection]
     (var handshake? true)
+    (def Socket (make-socket connection))
 
     (ignore-socket-hangup!
      (defer (do (buffer/clear buf)
@@ -269,18 +277,17 @@
 
            # ws://
            (if (websocket? connection-header upgrade-header)
-             (do
+             (when-let [req (request buf)]
                (when handshake?
                  (:write connection (websocket-handshake buf))
                  (set handshake? false)
-                 (handler {:on :connect}))
+                 (handler (table/setproto (merge req @{:on :connect :scheme "ws"}) Socket)))
                # only handle single frame payloads (less than 127 bytes)
                (let [idx (string/find "\r\n\r\n" buf)
                      b (buffer/slice buf (+ 4 idx))
                      frame (if (empty? b) (:read connection 126) b)
-                     data (websocket-frame frame)
-                     res (handler {:on :text :message data})]
-                 (:write connection (websocket-response res))))
+                     data (websocket-frame frame)]
+                  (handler (table/setproto (merge req @{:on :text :message data :scheme "ws"}) Socket))))
                # TODO ping pong
                # TODO websocket close
 
