@@ -55,7 +55,7 @@
                   "wasm" "application/wasm"
                   "gz" "application/gzip"})
 
-(var- *max-size* 8_192) # 8k max body size
+(def CRLF "\r\n")
 
 (def request-peg
   (peg/compile ~{:main (sequence :request-line :crlf (group (some :headers)) :crlf (opt :body))
@@ -63,12 +63,12 @@
                  :headers (sequence (capture (to ":")) ": " (capture (to :crlf)) :crlf)
                  :body (capture (some (if-not -1 1)))
                  :sp " "
-                 :crlf "\r\n"}))
+                 :crlf ,CRLF}))
 
 (def path-peg
   (peg/compile '(capture (some (if-not (choice "?" "#") 1)))))
 
-(def content-length-peg (peg/compile ~(some (choice (sequence "Content-Length: " (cmt (capture (to "\r\n")) ,scan-number)) 1))))
+(def content-length-peg (peg/compile ~(some (choice (sequence "Content-Length: " (cmt (capture (to ,CRLF)) ,scan-number)) 1))))
 
 (defn content-length [buf]
   (or (first (peg/match content-length-peg buf))
@@ -115,14 +115,14 @@
 (defn http-response-header [header]
   (let [[k v] header]
     (if (indexed? v)
-      (string/format "%s: %s" k (string/join v ","))
-      (string/format "%s: %s" k v))))
+      (string k ": " v (string/join v ","))
+      (string k ": " v))))
 
 
 (defn http-response-headers [headers]
   (as-> (pairs headers) ?
         (map http-response-header ?)
-        (string/join ? "\r\n")))
+        (string/join ? CRLF)))
 
 
 (defn file-exists? [str]
@@ -134,10 +134,10 @@
         status-message (get status-messages status "Unknown Status Code")
         body (get res :body "")
         headers (get res :headers @{})
-        headers (merge {"Content-Length" (string (length body))} headers)
+        headers (merge {"Content-Length" (length body)} headers)
         headers (http-response-headers headers)]
-    (string "HTTP/1.1 " status " " status-message "\r\n"
-            headers "\r\n\r\n"
+    (string "HTTP/1.1 " status " " status-message CRLF
+            headers CRLF CRLF
             body)))
 
 
@@ -160,10 +160,6 @@
     (http-response-string response)))
 
 
-(defn payload-too-large? [req]
-  (> (length (get req :body "")) *max-size*))
-
-
 (defmacro ignore-socket-hangup! [& args]
   ~(try
      ,;args
@@ -175,7 +171,7 @@
 
 (defn connection-handler
   "A function for turning circlet http handlers into stream handlers"
-  [handler]
+  [handler max-size]
   (def buf (buffer/new 1024))
 
   (fn [stream]
@@ -185,23 +181,22 @@
 
         (while (:read stream 1024 buf 7)
           (when-let [content-length (content-length buf)
-                     req (request buf)
-                     _ (= content-length (length (get req :body "")))]
-
-            # handle payload too large
-            (when (payload-too-large? req)
-             (:write stream (http-response-string @{:status 413})
-              (break)))
-
-            (->> req
-                 handler
-                 http-response
-                 (:write stream))
+                     request (request buf)
+                     _ (= content-length (length (get request :body "")))]
 
             (buffer/clear buf)
 
+            # handle payload too large
+            (when (> content-length max-size)
+             (:write stream (http-response-string @{:status 413}))
+             (break))
+
+            (as-> (handler request) _
+                  (http-response _)
+                  (:write stream _))
+
             # close connection right away if Connection: close
-            (when (close-connection? req)
+            (when (close-connection? request)
               (break))))))))
 
 
@@ -209,12 +204,10 @@
   (default host "localhost")
   (default max-size 8192)
 
-  (set *max-size* max-size)
-
   (let [port (string port)
         socket (net/server host port)]
     (printf "Starting server on %s:%s" host port)
 
     (forever
       (when-let [conn (:accept socket)]
-        (ev/call (connection-handler handler) conn)))))
+        (ev/call (connection-handler handler max-size) conn)))))
