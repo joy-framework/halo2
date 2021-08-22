@@ -60,7 +60,7 @@
 (def request-peg
   (peg/compile ~{:main (sequence :request-line :crlf (group (some :headers)) :crlf (opt :body))
                  :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
-                 :headers (sequence (capture (to ":")) ": " (capture (to :crlf)) :crlf)
+                 :headers (sequence (not :crlf) (capture (to ":")) ": " (capture (to :crlf)) :crlf)
                  :body (capture (some (if-not -1 1)))
                  :sp " "
                  :crlf ,CRLF}))
