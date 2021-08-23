@@ -60,7 +60,8 @@
 (def request-peg
   (peg/compile ~{:main (sequence :request-line :crlf (group (some :headers)) :crlf (opt :body))
                  :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
-                 :headers (sequence (not :crlf) (capture (to ":")) ": " (capture (to :crlf)) :crlf)
+                 :header-key (some (if-not (choice ":" :crlf) 1))
+                 :headers (sequence (capture :header-key) ": " (capture (to :crlf)) :crlf)
                  :body (capture (some (if-not -1 1)))
                  :sp " "
                  :crlf ,CRLF}))
@@ -178,19 +179,31 @@
     (ignore-socket-hangup!
       (defer (do (buffer/clear buf)
                  (:close stream))
-
         (while (:read stream 1024 buf 7)
           (when-let [content-length (content-length buf)
                      request (request buf)
-                     _ (= content-length (length (get request :body "")))]
-
-            (buffer/clear buf)
-
-            # handle payload too large
+                     request-body (get request :body "")]
+            # Terminate the request early if it exceeds the size limit
             (when (> content-length max-size)
              (:write stream (http-response-string @{:status 413}))
+             (buffer/clear buf)
              (break))
 
+            # Read the rest of the request from the socket
+            (when (> content-length (length request-body))
+              (var body-buffer (buffer request-body))
+              (var bytes-remaining (- content-length (length body-buffer)))
+              # Read from socket until all bytes have been read
+              (while (:read stream (min bytes-remaining 1024) body-buffer 7)
+                (set bytes-remaining (- content-length (length body-buffer)))
+                (when (= 0 bytes-remaining) (break)))
+              # Put the buffer back into the body
+              (put request :body body-buffer))
+
+            # The buffer can be cleared because it is now on the request.
+            (buffer/clear buf)
+
+            # Call the application handler with the completed request
             (as-> (handler request) _
                   (http-response _)
                   (:write stream _))
