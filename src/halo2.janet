@@ -185,9 +185,20 @@
                      request-body (get request :body "")]
             # Terminate the request early if it exceeds the size limit
             (when (> content-length max-size)
-             (:write stream (http-response-string @{:status 413}))
-             (buffer/clear buf)
-             (break))
+              # Clients do not read the response until the full request has been sent
+              # The following just overwrites the same buffer over and over
+              # Until the expected content-length is consumed
+              (var bytes-remaining (- content-length (length (get request :body ""))))
+              (buffer/clear buf)
+              (while (:read stream (min bytes-remaining 1024) buf 7)
+                (set bytes-remaining (- bytes-remaining (length buf)))
+                (buffer/clear buf)
+                (when (= 0 bytes-remaining) (break)))
+
+              # Respond to the client after the request has been consumed with entity too large
+              (:write stream (http-response-string @{:status 413}))
+              (buffer/clear buf)
+              (break))
 
             # Read the rest of the request from the socket
             (when (> content-length (length request-body))
