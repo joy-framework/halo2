@@ -60,7 +60,8 @@
 (def request-peg
   (peg/compile ~{:main (sequence :request-line :crlf (group (some :headers)) :crlf (opt :body))
                  :request-line (sequence (capture (to :sp)) :sp (capture (to :sp)) :sp "HTTP/" (capture (to :crlf)))
-                 :headers (sequence (capture (to ":")) ": " (capture (to :crlf)) :crlf)
+                 :header-key (some (if-not (choice ":" :crlf) 1))
+                 :headers (sequence (capture :header-key) ": " (capture (to :crlf)) :crlf)
                  :body (capture (some (if-not -1 1)))
                  :sp " "
                  :crlf ,CRLF}))
@@ -74,6 +75,8 @@
   (or (first (peg/match content-length-peg buf))
       0))
 
+(defn expect-header [req]
+  (or (get-in req [:headers "Expect"]) (get-in req [:headers "expect"])))
 
 (defn content-type [s]
   (as-> (string/split "." s) _
@@ -178,22 +181,68 @@
     (ignore-socket-hangup!
       (defer (do (buffer/clear buf)
                  (:close stream))
-
         (while (:read stream 1024 buf 7)
           (when-let [content-length (content-length buf)
                      request (request buf)
-                     _ (= content-length (length (get request :body "")))]
+                     request-body (get request :body "")]
+            # Early termination / ignore of a request should not drop
+            # the connection. This can impact load balancers which
+            # reuse connections to the upstream server between their
+            # clients.
+            (var handled false)
+            # If the client is requesting a preflight check on the request
+            # Let it continue if it does not exceed the size limit
+            # https://datatracker.ietf.org/doc/html/rfc7231#section-5.1.1
+            (when (= "100-continue" (expect-header request))
+              (if (> content-length max-size)
+                (do
+                  # Early 413 without consuming the body
+                  (:write stream (http-response-string @{:status 413}))
+                  (buffer/clear buf)
+                  (set handled true)
+                )
+                # Ideally the application makes this determination
+                # But because halo2 buffers the request before sending
+                # it to the application handler, halo2 should therefore
+                # prompt the client to send the rest of the body without
+                # waiting.
+                (:write stream (string "HTTP/1.1 100 Continue" CRLF CRLF))))
 
+            # Terminate the request early if it exceeds the size limit
+            (when (and (not handled) (> content-length max-size))
+              # Clients do not read the response until the full request has been sent
+              # The following just overwrites the same buffer over and over
+              # Until the expected content-length is consumed
+              (var bytes-remaining (- content-length (length (get request :body ""))))
+              (buffer/clear buf)
+              (while (:read stream (min bytes-remaining 1024) buf 7)
+                (set bytes-remaining (- bytes-remaining (length buf)))
+                (buffer/clear buf)
+                (when (= 0 bytes-remaining) (break)))
+
+              # Respond to the client after the request has been consumed with entity too large
+              (:write stream (http-response-string @{:status 413}))
+              (set handled true))
+
+            # Read the rest of the request from the socket
+            (when (and (not handled) (> content-length (length request-body)))
+              (var body-buffer (buffer request-body))
+              (var bytes-remaining (- content-length (length body-buffer)))
+              # Read from socket until all bytes have been read
+              (while (:read stream (min bytes-remaining 1024) body-buffer 7)
+                (set bytes-remaining (- content-length (length body-buffer)))
+                (when (= 0 bytes-remaining) (break)))
+              # Put the buffer back into the body
+              (put request :body body-buffer))
+
+            # The buffer can be cleared because it is now on the request.
             (buffer/clear buf)
 
-            # handle payload too large
-            (when (> content-length max-size)
-             (:write stream (http-response-string @{:status 413}))
-             (break))
-
-            (as-> (handler request) _
+            # Call the application handler with the completed request
+            (when (not handled)
+              (as-> (handler request) _
                   (http-response _)
-                  (:write stream _))
+                  (:write stream _)))
 
             # close connection right away if Connection: close
             (when (close-connection? request)
@@ -206,7 +255,6 @@
 
   (let [port (string port)
         socket (net/server host port)]
-    (printf "Starting server on %s:%s" host port)
 
     (forever
       (when-let [conn (:accept socket)]
