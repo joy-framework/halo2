@@ -75,6 +75,8 @@
   (or (first (peg/match content-length-peg buf))
       0))
 
+(defn expect-header [req]
+  (or (get-in req [:headers "Expect"]) (get-in req [:headers "expect"])))
 
 (defn content-type [s]
   (as-> (string/split "." s) _
@@ -183,8 +185,31 @@
           (when-let [content-length (content-length buf)
                      request (request buf)
                      request-body (get request :body "")]
+            # Early termination / ignore of a request should not drop
+            # the connection. This can impact load balancers which
+            # reuse connections to the upstream server between their
+            # clients.
+            (var handled false)
+            # If the client is requesting a preflight check on the request
+            # Let it continue if it does not exceed the size limit
+            # https://datatracker.ietf.org/doc/html/rfc7231#section-5.1.1
+            (when (= "100-continue" (expect-header request))
+              (if (> content-length max-size)
+                (do
+                  # Early 413 without consuming the body
+                  (:write stream (http-response-string @{:status 413}))
+                  (buffer/clear buf)
+                  (set handled true)
+                )
+                # Ideally the application makes this determination
+                # But because halo2 buffers the request before sending
+                # it to the application handler, halo2 should therefore
+                # prompt the client to send the rest of the body without
+                # waiting.
+                (:write stream (string "HTTP/1.1 100 Continue" CRLF CRLF))))
+
             # Terminate the request early if it exceeds the size limit
-            (when (> content-length max-size)
+            (when (and (not handled) (> content-length max-size))
               # Clients do not read the response until the full request has been sent
               # The following just overwrites the same buffer over and over
               # Until the expected content-length is consumed
@@ -197,11 +222,10 @@
 
               # Respond to the client after the request has been consumed with entity too large
               (:write stream (http-response-string @{:status 413}))
-              (buffer/clear buf)
-              (break))
+              (set handled true))
 
             # Read the rest of the request from the socket
-            (when (> content-length (length request-body))
+            (when (and (not handled) (> content-length (length request-body)))
               (var body-buffer (buffer request-body))
               (var bytes-remaining (- content-length (length body-buffer)))
               # Read from socket until all bytes have been read
@@ -215,9 +239,10 @@
             (buffer/clear buf)
 
             # Call the application handler with the completed request
-            (as-> (handler request) _
+            (when (not handled)
+              (as-> (handler request) _
                   (http-response _)
-                  (:write stream _))
+                  (:write stream _)))
 
             # close connection right away if Connection: close
             (when (close-connection? request)
@@ -230,7 +255,6 @@
 
   (let [port (string port)
         socket (net/server host port)]
-    (printf "Starting server on %s:%s" host port)
 
     (forever
       (when-let [conn (:accept socket)]
