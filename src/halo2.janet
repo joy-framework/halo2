@@ -132,36 +132,53 @@
   (= :file (os/stat str :mode)))
 
 
-(defn http-response-string [res]
+(defn http-response-headers-string [res]
   (let [status (get res :status 200)
         status-message (get status-messages status "Unknown Status Code")
-        body (get res :body "")
         headers (get res :headers @{})
-        headers (merge {"Content-Length" (length body)} headers)
+        body (get res :body "")
+        headers (if (bytes? body)
+                    (merge {"Content-Length" (length body)} headers)
+                    (merge {"Transfer-Encoding" "chunked"} headers))
         headers (http-response-headers headers)]
     (string "HTTP/1.1 " status " " status-message CRLF
-            headers CRLF CRLF
-            body)))
+            headers CRLF CRLF)))
+
+(defn send-response-file [stream response]
+  (let [file (get response :file)
+        content-type (content-type file)
+        file-exists? (file-exists? file)
+        body (if file-exists? (slurp file) "not found")
+        status (if file-exists? 200 404)
+        gzip? (= "application/gzip" content-type)
+        response @{:status status
+                  :body body
+                  :headers (merge 
+                            (get response :headers {}) 
+                            {"Content-Type" content-type
+                             "Content-Encoding" (when gzip? "gzip")})}
+        headers-string (http-response-headers-string response)]
+      (:write stream headers-string)
+      (:write stream body)))
 
 
-(defn http-response
-  "Turns a response dictionary into an http response string"
-  [response]
-  # check for static files
-  (if-let [file (get response :file)]
-    (let [content-type (content-type file)
-          headers (get response :headers {})
-          file-exists? (file-exists? file)
-          body (if file-exists? (slurp file) "not found")
-          status (if file-exists? 200 404)
-          gzip? (= "application/gzip" content-type)]
-      (http-response-string @{:status status
-                              :headers (merge headers {"Content-Type" content-type
-                                                       "Content-Encoding" (when gzip? "gzip")})
-                              :body body}))
-    # regular http responses
-    (http-response-string response)))
+(defn send-response-body-stream [stream response]
+  (defn send-chunk [chunk]
+    (:write stream (string/format "%X\r\n" (length chunk)))
+    (:write stream chunk)
+    (:write stream "\r\n"))
 
+  (:write stream (http-response-headers-string response))
+  
+  (let [body (get response :body)]
+    (each chunk body
+      (send-chunk chunk)))
+  # Indicate the end of the stream
+  (send-chunk ""))
+
+(defn send-response [stream response]
+  (:write stream (http-response-headers-string response))
+  (:write stream (get response :body "")))
 
 (defmacro ignore-socket-hangup! [& args]
   ~(try
@@ -197,7 +214,7 @@
               (if (> content-length max-size)
                 (do
                   # Early 413 without consuming the body
-                  (:write stream (http-response-string @{:status 413}))
+                  (:write stream (http-response-headers-string @{:status 413}))
                   (buffer/clear buf)
                   (set handled true)
                 )
@@ -221,7 +238,7 @@
                 (when (= 0 bytes-remaining) (break)))
 
               # Respond to the client after the request has been consumed with entity too large
-              (:write stream (http-response-string @{:status 413}))
+              (:write stream (http-response-headers-string @{:status 413}))
               (set handled true))
 
             # Read the rest of the request from the socket
@@ -240,9 +257,22 @@
 
             # Call the application handler with the completed request
             (when (not handled)
-              (as-> (handler request) _
-                  (http-response _)
-                  (:write stream _)))
+              (let [response (handler request)
+                    file? (get response :file)
+                    body (get response :body)
+                    body-stream? (= (type body) :fiber)
+                    bytes? (bytes? body)]
+
+                (cond
+                  file? (send-response-file stream response)
+                  body-stream? (send-response-body-stream stream response)
+                  bytes? (send-response stream response)
+                  :default (do 
+                            (send-response stream 
+                              {:status 500
+                                :body (get status-messages 500)
+                                :headers {"Content-Type" "text/plain"}})
+                            (error "Response body must be bytes or a fiber stream")))))
 
             # close connection right away if Connection: close
             (when (close-connection? request)
