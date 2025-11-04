@@ -53,6 +53,7 @@
                   "gif" "image/gif"
                   "png" "image/png"
                   "wasm" "application/wasm"
+                  "pdf" "application/pdf"
                   "gz" "application/gzip"})
 
 (def CRLF "\r\n")
