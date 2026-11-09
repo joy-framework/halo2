@@ -118,13 +118,13 @@
 (defn http-response-header [header]
   (let [[k v] header]
     (if (indexed? v)
-      (string/join (map (fn [hv] (string k ": " hv)) v) "\r\n")
-      (string k ": " v))))
+      (map |(string k ": " $) v)
+      [(string k ": " v)])))
 
 
 (defn http-response-headers [headers]
   (as-> (pairs headers) ?
-        (map http-response-header ?)
+        (mapcat http-response-header ?)
         (string/join ? CRLF)))
 
 
